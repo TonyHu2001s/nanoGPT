@@ -7,6 +7,8 @@ from contextlib import nullcontext
 import torch
 import tiktoken
 from model import GPTConfig, GPT
+from torch.profiler import profile, record_function, ProfilerActivity
+# import torchvision.models as models
 
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
@@ -80,10 +82,26 @@ if start.startswith('FILE:'):
 start_ids = encode(start)
 x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
 
+# # run generation
+# with torch.no_grad():
+#     with ctx:
+#         for k in range(num_samples):
+#             y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
+#             print(decode(y[0].tolist()))
+#             print('---------------')
+
 # run generation
 with torch.no_grad():
     with ctx:
-        for k in range(num_samples):
-            y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
-            print(decode(y[0].tolist()))
-            print('---------------')
+        # 使用 torch.profiler 进行性能分析
+        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, profile_memory=True) as prof:
+            for k in range(num_samples):
+                with record_function("model_inference"):
+                    # 生成文本
+                    y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
+                    print(decode(y[0].tolist()))
+                    print('---------------')
+
+# 打印性能分析结果
+print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+print('********************')
