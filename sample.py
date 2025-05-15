@@ -8,6 +8,7 @@ import torch
 import tiktoken
 from model import GPTConfig, GPT
 from torch.profiler import profile, record_function, ProfilerActivity
+from torch.cuda import nvtx
 # import torchvision.models as models
 
 # -----------------------------------------------------------------------------
@@ -23,6 +24,7 @@ device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
 compile = False # use PyTorch 2.0 to compile the model to be faster
 exec(open('configurator.py').read()) # overrides from command line or config file
+warmup = 10 # warmup iterations for nvtx profiling
 # -----------------------------------------------------------------------------
 
 torch.manual_seed(seed)
@@ -82,6 +84,24 @@ if start.startswith('FILE:'):
 start_ids = encode(start)
 x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
 
+for _ in range(warmup):
+    with torch.no_grad():
+        with ctx:
+            y = model.generate(x, 128, temperature=temperature, top_k=top_k)
+            # print(decode(y[0].tolist()))
+            # print('---------------')
+
+# run generation
+with torch.no_grad():
+    with ctx:
+        torch.cuda.cudart().cudaProfilerStart()
+        for k in range(num_samples):
+            with torch.cuda.nvtx.range("Sample_{}", k):
+                y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
+                print(decode(y[0].tolist()))
+                print('---------------')
+        torch.cuda.cudart().cudaProfilerStop()
+
 # # run generation
 # with torch.no_grad():
 #     with ctx:
@@ -90,18 +110,18 @@ x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
 #             print(decode(y[0].tolist()))
 #             print('---------------')
 
-# run generation
-with torch.no_grad():
-    with ctx:
-        # 使用 torch.profiler 进行性能分析
-        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, profile_memory=True) as prof:
-            for k in range(num_samples):
-                with record_function("model_inference"):
-                    # 生成文本
-                    y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
-                    print(decode(y[0].tolist()))
-                    print('---------------')
+# # run generation
+# with torch.no_grad():
+#     with ctx:
+#         # 使用 torch.profiler 进行性能分析
+#         with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, profile_memory=True) as prof:
+#             for k in range(num_samples):
+#                 with record_function("model_inference"):
+#                     # 生成文本
+#                     y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
+#                     print(decode(y[0].tolist()))
+#                     print('---------------')
 
-# 打印性能分析结果
-print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-print('********************')
+# # 打印性能分析结果
+# print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+# print('********************')
